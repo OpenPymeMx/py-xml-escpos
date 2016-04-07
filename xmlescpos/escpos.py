@@ -310,6 +310,7 @@ class Escpos:
     device    = None
     encoding  = None
     img_cache = {}
+    slip_sheet_mode = False
 
     def _check_image_size(self, size):
         """ Check and fix the size of the image to 32 bits """

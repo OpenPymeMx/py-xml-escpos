@@ -33,17 +33,50 @@ class Usb(Escpos):
     
     def open(self):
         """ Search device on USB tree and set is as escpos device """
-        
-        self.device = usb.core.find(idVendor=self.idVendor, idProduct=self.idProduct)
+        self.device = usb.core.find(
+            idVendor=self.idVendor, idProduct=self.idProduct
+        )
         if self.device is None:
             raise NoDeviceError()
+
         try:
-            if self.device.is_kernel_driver_active(self.interface):
-                self.device.detach_kernel_driver(self.interface) 
+            # This feature is only available on linux
+            if self.device.is_kernel_driver_active(0):
+                try:
+                    self.device.detach_kernel_driver(0)
+                except usb.core.USBError as e:
+                    print "Could not detatch kernel driver: %s" % str(e)
+        except:
+            # Simply pass because windows not implement is_kernel_driver_active
+            pass
+
+        try:
             self.device.set_configuration()
-            usb.util.claim_interface(self.device, self.interface)
         except usb.core.USBError as e:
-            raise HandleDeviceError(e)
+            print "Could not set configuration: %s" % str(e)
+
+
+        # get the configuration
+        cfg = self.device.get_active_configuration()
+        # get the first interface/alternate interface
+        interface_number = cfg[(0, 0)].bInterfaceNumber
+        alternate_setting = usb.control.get_interface(
+            self.device, interface_number
+        )
+        intf = usb.util.find_descriptor(
+            cfg, bInterfaceNumber=interface_number,
+            bAlternateSetting=alternate_setting
+        )
+
+        self.handle = usb.util.find_descriptor(
+            intf,
+            # match the first OUT endpoint
+            custom_match=\
+            lambda e: \
+                usb.util.endpoint_direction(e.bEndpointAddress) == \
+                usb.util.ENDPOINT_OUT
+        )
+        assert self.handle is not None
 
     def close(self):
         i = 0
@@ -65,8 +98,8 @@ class Usb(Escpos):
 
     def _raw(self, msg):
         """ Print any command sent in raw format """
-        if len(msg) != self.device.write(self.out_ep, msg, self.interface):
-            self.device.write(self.out_ep, self.errorText, self.interface)
+        if len(msg) != self.handle.write(msg):
+            self.handle.write(self.errorText)
             raise TicketNotPrinted()
     
     def __extract_status(self):
@@ -76,7 +109,7 @@ class Usb(Escpos):
             maxiterate += 1
             if maxiterate > 10000:
                 raise NoStatusError()
-            r = self.device.read(self.in_ep, 20, self.interface).tolist()
+            r = self.handle.read(20).tolist()
             while len(r):
                 rep = r.pop()
         return rep
@@ -89,13 +122,13 @@ class Usb(Escpos):
             'paper'  : {},
         }
 
-        self.device.write(self.out_ep, DLE_EOT_PRINTER, self.interface)
+        self.handle.write(DLE_EOT_PRINTER)
         printer = self.__extract_status()    
-        self.device.write(self.out_ep, DLE_EOT_OFFLINE, self.interface)
+        self.handle.write(DLE_EOT_OFFLINE)
         offline = self.__extract_status()
-        self.device.write(self.out_ep, DLE_EOT_ERROR, self.interface)
+        self.handle.write(DLE_EOT_ERROR)
         error = self.__extract_status()
-        self.device.write(self.out_ep, DLE_EOT_PAPER, self.interface)
+        self.handle.write(DLE_EOT_PAPER)
         paper = self.__extract_status()
             
         status['printer']['status_code']     = printer
